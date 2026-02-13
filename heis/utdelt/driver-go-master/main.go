@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-//ballesatan (fjern denne)
+//ballesatan mordi e mann(fjern denne)
 
 func main() {
 
