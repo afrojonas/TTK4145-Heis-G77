@@ -5,8 +5,6 @@ import (
 	"fmt"
 )
 
-//ballesatan mordi e mann(fjern denne)
-
 func main() {
 
 	numFloors := 4
