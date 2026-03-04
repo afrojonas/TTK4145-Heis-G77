@@ -10,15 +10,22 @@ func main() {
 	numFloors := 4
 	elevio.Init("localhost:15657", numFloors)
 
+	// FSM channels
 	drvButtons := make(chan elevio.ButtonEvent)
 	drvFloors := make(chan int)
 	drvObstr := make(chan bool)
+	drvOrders := make(chan fsm.Order, 10)
 
+	// OrderAssigner will be added in Fase 2
+	fsmStateUpdates := make(chan fsm.StateUpdate, 10)
+
+	// Start hardware polling
 	go elevio.PollButtons(drvButtons)
 	go elevio.PollFloorSensor(drvFloors)
 	go elevio.PollObstructionSwitch(drvObstr)
 
-	fsm.Run(numFloors, drvButtons, drvFloors, drvObstr)
+	// Start FSM - handles all orders locally in Fase 1
+	fsm.Run(numFloors, drvButtons, drvFloors, drvObstr, drvOrders, fsmStateUpdates)
 }
 
 // func main() {

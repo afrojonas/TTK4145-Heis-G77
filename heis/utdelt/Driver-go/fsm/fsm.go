@@ -9,6 +9,17 @@ import (
 
 const DoorOpenDur = 3 * time.Second
 
+type Order struct {
+	Floor  int
+	Button elevio.ButtonType
+}
+
+type StateUpdate struct {
+	Floor     int
+	Direction int
+	Orders    [][]bool
+}
+
 type State int
 
 const (
@@ -31,14 +42,18 @@ type Elevator struct {
 	dir        Dir
 	lastDir    Dir
 	obstructed bool
+	doorTimer  *time.Timer
 
-	orders [][]bool
+	orders  [][]bool
+	stateCh chan<- StateUpdate
 }
 
 func Run(numFloors int,
 	btnCh <-chan elevio.ButtonEvent,
 	floorCh <-chan int,
 	obstrCh <-chan bool,
+	orderCh <-chan Order,
+	stateCh chan<- StateUpdate,
 ) {
 	e := Elevator{
 		state:   ST_Idle,
@@ -46,6 +61,7 @@ func Run(numFloors int,
 		dir:     DIR_Stop,
 		lastDir: DIR_Up,
 		orders:  make([][]bool, numFloors),
+		stateCh: stateCh,
 	}
 	for f := 0; f < numFloors; f++ {
 		e.orders[f] = make([]bool, 3)
@@ -56,6 +72,13 @@ func Run(numFloors int,
 	elevio.SetMotorDirection(elevio.MD_Stop)
 	elevio.SetDoorOpenLamp(false)
 	elevio.SetFloorIndicator(0)
+
+	// Initialize all button lamps to OFF
+	for f := 0; f < numFloors; f++ {
+		for bt := elevio.ButtonType(0); bt < 3; bt++ {
+			elevio.SetButtonLamp(bt, f, false)
+		}
+	}
 
 	// Init obstruction state (nice-to-have)
 	e.obstructed = elevio.GetObstruction()
@@ -73,6 +96,12 @@ func Run(numFloors int,
 	}
 
 	for {
+		// Create a dynamic door timeout channel
+		var doorTimeoutCh <-chan time.Time
+		if e.doorTimer != nil {
+			doorTimeoutCh = e.doorTimer.C
+		}
+
 		select {
 		case b := <-btnCh:
 			onButton(&e, b)
@@ -82,6 +111,12 @@ func Run(numFloors int,
 
 		case o := <-obstrCh:
 			onObstruction(&e, o)
+
+		case ord := <-orderCh:
+			onExternalOrder(&e, ord)
+
+		case <-doorTimeoutCh:
+			onDoorTimeout(&e)
 		}
 	}
 }
@@ -103,6 +138,9 @@ func onFloor(e *Elevator, f int) {
 	e.floor = f
 	elevio.SetFloorIndicator(f)
 	fmt.Printf("[FLOOR] %d state=%s dir=%s obstr=%v\n", f, stateToStr(e.state), dirToStr(e.dir), e.obstructed)
+
+	// Send state update
+	sendStateUpdate(e)
 
 	// Hvis vi init-kjører for å finne etasje og det ikke finnes ordre: gå idle
 	if e.state == ST_Moving && !hasAnyOrders(e) {
@@ -138,16 +176,11 @@ func onFloor(e *Elevator, f int) {
 
 		clearOrdersAtFloor(e, f)
 
-		// OBS: Denne sleepen blokkerer event-loop.
-		// Det betyr at obstruction-events ikke behandles mens døra “står åpen”.
-		// For en enkel første versjon er det OK, men senere bør du bruke timer-kanal.
-		time.Sleep(DoorOpenDur)
-
-		elevio.SetDoorOpenLamp(false)
-		fmt.Println("[DOOR] CLOSED")
-
-		e.state = ST_Idle
-		startOrStayIdle(e)
+		// Start door timer - non-blocking
+		if e.doorTimer != nil {
+			e.doorTimer.Stop()
+		}
+		e.doorTimer = time.NewTimer(DoorOpenDur)
 	}
 }
 
@@ -156,9 +189,12 @@ func onObstruction(e *Elevator, active bool) {
 	fmt.Printf("[OBSTR] %v\n", active)
 
 	if active {
-		// Kravet ditt: aldri kjøre når obstruksjon er på
+		// Obstruksjon aktiv: sett dør-åpen-lys PÅ og stopp motor
+		elevio.SetDoorOpenLamp(true)
+		fmt.Println("[DOOR LIGHT] ON (obstruction active)")
 		elevio.SetMotorDirection(elevio.MD_Stop)
 		fmt.Println("[MOTOR] STOP (obstruction)")
+
 		// sett til idle slik at vi kan starte igjen når obstruction slipper
 		if e.state == ST_Moving {
 			e.state = ST_Idle
@@ -167,10 +203,64 @@ func onObstruction(e *Elevator, active bool) {
 		return
 	}
 
-	// obstruction ble slått av: hvis vi står idle og har ordre, fortsett
+	// Obstruksjon ble slått av: start timer for å slukke dør-lyset etter 3 sekunder
+	fmt.Println("[OBSTR] cleared -> door light will turn off in 3 seconds")
+	if e.doorTimer != nil {
+		e.doorTimer.Stop()
+	}
+	e.doorTimer = time.NewTimer(DoorOpenDur)
+
+	// Hvis vi står idle og har ordre, fortsett
 	if e.state == ST_Idle && hasAnyOrders(e) {
 		fmt.Println("[OBSTR] cleared -> resume if orders exist")
 		startOrStayIdle(e)
+	}
+}
+
+func onExternalOrder(e *Elevator, ord Order) {
+	fmt.Printf("[EXTERNAL ORDER] floor=%d button=%d\n", ord.Floor, ord.Button)
+
+	if ord.Floor < 0 || ord.Floor >= len(e.orders) {
+		fmt.Println("[ERROR] Invalid floor in external order")
+		return
+	}
+
+	// Legg til ordre hvis det ikke allerede finnes
+	if !e.orders[ord.Floor][ord.Button] {
+		e.orders[ord.Floor][ord.Button] = true
+		elevio.SetButtonLamp(ord.Button, ord.Floor, true)
+	}
+
+	// Hvis vi står stille: prøv å starte
+	if e.state == ST_Idle {
+		startOrStayIdle(e)
+	}
+}
+
+// Helper function to safely get door timer channel
+func onDoorTimeout(e *Elevator) {
+	// Hvis obstruksjon er aktiv, ignorer timeout - lyset skal forbli PÅ!
+	if e.obstructed {
+		fmt.Println("[TIMEOUT] ignored - obstruction still active, door light stays ON")
+		// Restart timer så vi prøver igjen senere
+		if e.doorTimer != nil {
+			e.doorTimer.Stop()
+		}
+		e.doorTimer = time.NewTimer(1 * time.Second) // Check again soon
+		return
+	}
+
+	if e.state == ST_DoorOpen {
+		// Full dør-sekvens: lukkdøren og gå tilbake til IDLE
+		fmt.Println("[DOOR] CLOSED")
+		elevio.SetDoorOpenLamp(false)
+
+		e.state = ST_Idle
+		startOrStayIdle(e)
+	} else {
+		// Obstruksjon-timeout: bare slukk lyset
+		fmt.Println("[DOOR LIGHT] OFF (obstruction timeout)")
+		elevio.SetDoorOpenLamp(false)
 	}
 }
 
@@ -194,6 +284,9 @@ func startOrStayIdle(e *Elevator) {
 		return
 	}
 
+	// Heisen skal kjøre - slå av dør-lyset hvis det står på
+	elevio.SetDoorOpenLamp(false)
+
 	e.state = ST_Moving
 	e.dir = next
 	e.lastDir = next
@@ -205,6 +298,9 @@ func startOrStayIdle(e *Elevator) {
 		fmt.Println("[MOTOR] DOWN")
 		elevio.SetMotorDirection(elevio.MD_Down)
 	}
+
+	// Send state update
+	sendStateUpdate(e)
 }
 
 /*** Queue policy ***/
@@ -313,6 +409,36 @@ func hasOrdersBelow(e *Elevator, floor int) bool {
 		}
 	}
 	return false
+}
+
+// sendStateUpdate sends the current elevator state to the order assigner
+// Uses non-blocking send to avoid deadlock
+func sendStateUpdate(e *Elevator) {
+	if e.stateCh == nil {
+		return
+	}
+
+	// Create a copy of orders slice
+	ordersCopy := make([][]bool, len(e.orders))
+	for i := range e.orders {
+		ordersCopy[i] = make([]bool, len(e.orders[i]))
+		copy(ordersCopy[i], e.orders[i])
+	}
+
+	update := StateUpdate{
+		Floor:     e.floor,
+		Direction: int(e.dir),
+		Orders:    ordersCopy,
+	}
+
+	// Non-blocking send
+	select {
+	case e.stateCh <- update:
+		// State sent successfully
+	default:
+		// Channel full or not ready - don't block FSM
+		fmt.Printf("[FSM] state update channel not ready (full), skipping\n")
+	}
 }
 
 func stateToStr(s State) string {
