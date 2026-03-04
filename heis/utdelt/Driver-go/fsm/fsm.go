@@ -1,10 +1,9 @@
 package fsm
 
 import (
+	"Driver-go/elevio"
 	"fmt"
 	"time"
-
-	"Driver-go/elevio"
 )
 
 const DoorOpenDur = 3 * time.Second
