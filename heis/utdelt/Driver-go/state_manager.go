@@ -9,15 +9,15 @@ import (
 // StateManager kombinerer broadcasting av egen state med mottak av andres state
 // bruker Network-go sitt bcast og peers system direkte
 type StateManager struct {
-	elevatorID     int
-	myStateCh      <-chan fsm.StateUpdate    // Fra FSM
-	stateTxCh      chan<- ElevatorStateMsg   // Til bcast.Transmitter
-	stateRxCh      <-chan ElevatorStateMsg   // Fra bcast.Receiver
-	globalStateCh  chan<- GlobalNetworkState // Utgående komplett tilstand
-	knownElevators map[int]ElevatorStateMsg  // Lagrete stater
-	lastPrintedState map[int]ElevatorStateMsg // Siste state vi printet (for change detection)
-	lastPeerUpdate time.Time
-	numFloors      int
+	elevatorID       int
+	myStateCh        <-chan fsm.StateUpdate    // Fra FSM
+	stateTxCh        chan<- ElevatorStateMsg   // Til bcast.Transmitter
+	stateRxCh        <-chan ElevatorStateMsg   // Fra bcast.Receiver
+	globalStateCh    chan<- GlobalNetworkState // Utgående komplett tilstand
+	knownElevators   map[int]ElevatorStateMsg  // Lagrete stater
+	lastPrintedState map[int]ElevatorStateMsg  // Siste state vi printet (for change detection)
+	lastPeerUpdate   time.Time
+	numFloors        int
 }
 
 // NewStateManager oppretter StateManager
@@ -30,14 +30,14 @@ func NewStateManager(
 	globalStateCh chan<- GlobalNetworkState,
 ) *StateManager {
 	return &StateManager{
-		elevatorID:        elevatorID,
-		myStateCh:         myStateCh,
-		stateTxCh:         stateTxCh,
-		stateRxCh:         stateRxCh,
-		globalStateCh:     globalStateCh,
-		knownElevators:    make(map[int]ElevatorStateMsg),
-		lastPrintedState:  make(map[int]ElevatorStateMsg),
-		numFloors:         numFloors,
+		elevatorID:       elevatorID,
+		myStateCh:        myStateCh,
+		stateTxCh:        stateTxCh,
+		stateRxCh:        stateRxCh,
+		globalStateCh:    globalStateCh,
+		knownElevators:   make(map[int]ElevatorStateMsg),
+		lastPrintedState: make(map[int]ElevatorStateMsg),
+		numFloors:        numFloors,
 	}
 }
 
@@ -79,17 +79,17 @@ func (sm *StateManager) Run() {
 			if rcvdState.ID == sm.elevatorID {
 				continue
 			}
-			
+
 			// Sjekk om staten har endret seg
 			lastState, exists := sm.lastPrintedState[rcvdState.ID]
 			stateChanged := !exists || lastState.Floor != rcvdState.Floor || lastState.Direction != rcvdState.Direction
-			
+
 			if stateChanged {
 				fmt.Printf("[StateManager-%d] State change: elev %d floor=%d dir=%d\n",
 					sm.elevatorID, rcvdState.ID, rcvdState.Floor, rcvdState.Direction)
 				sm.lastPrintedState[rcvdState.ID] = rcvdState
 			}
-			
+
 			sm.knownElevators[rcvdState.ID] = rcvdState
 			sm.publishGlobalState()
 
