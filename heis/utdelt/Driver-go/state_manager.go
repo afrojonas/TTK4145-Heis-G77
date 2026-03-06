@@ -49,7 +49,7 @@ func (sm *StateManager) Run() {
 	timeoutTicker := time.NewTicker(500 * time.Millisecond)
 
 	// Broadcast tick - send state jevnlig selv om ingenting har endret
-	broadcastTicker := time.NewTicker(100 * time.Millisecond)
+	broadcastTicker := time.NewTicker(500 * time.Millisecond)
 
 	// Siste kjente state
 	myState := ElevatorStateMsg{
@@ -73,9 +73,12 @@ func (sm *StateManager) Run() {
 
 		// Motta state fra andre heiser
 		case rcvdState := <-sm.stateRxCh:
+			// Bare printe hvis det er fra en annen heis
+			if rcvdState.ID != sm.elevatorID {
+				fmt.Printf("[StateManager-%d] Received state from elev %d: floor=%d\n",
+					sm.elevatorID, rcvdState.ID, rcvdState.Floor)
+			}
 			sm.knownElevators[rcvdState.ID] = rcvdState
-			fmt.Printf("[StateManager-%d] Received state from elev %d: floor=%d\n",
-				sm.elevatorID, rcvdState.ID, rcvdState.Floor)
 			sm.publishGlobalState()
 
 		// Broadcast min state jevnlig
