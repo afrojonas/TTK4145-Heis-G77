@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"time"
 )
 
 func main() {
@@ -128,24 +127,6 @@ func main() {
 	go fsm.Run(numFloors, drvButtons, drvFloors, drvObstr, drvOrders, fsmStateUpdates)
 
 	fmt.Println("[Main] System ready!")
-
-	// TEMP: Simulator hall order generator for testing
-	go func() {
-		time.Sleep(3 * time.Second)
-		hallOrderID := 1
-		for {
-			hallOrder := HallOrderMsg{
-				ID:     hallOrderID,
-				Floor:  2,
-				Button: elevio.BT_HallUp,
-				Time:   time.Now().UnixNano(),
-			}
-			fmt.Printf("[Main] Publishing test hall order: floor=%d\n", hallOrder.Floor)
-			hallOrderTxCh <- hallOrder
-			hallOrderID++
-			time.Sleep(10 * time.Second)
-		}
-	}()
 
 	// Keep running
 	select {}

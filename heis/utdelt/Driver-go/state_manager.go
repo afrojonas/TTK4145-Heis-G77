@@ -105,6 +105,9 @@ func (sm *StateManager) Run() {
 			default:
 				// Channel full, skip
 			}
+			// Lagre egen state i knownElevators slik at den ikke timeout-es
+			sm.knownElevators[sm.elevatorID] = myState
+			sm.publishGlobalState()
 
 		// Periodisk timeout check
 		case <-timeoutTicker.C:
