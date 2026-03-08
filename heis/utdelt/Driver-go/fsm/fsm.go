@@ -263,6 +263,8 @@ func onDoorTimeout(e *Elevator) {
 	}
 }
 
+//superirriterende git
+
 func startOrStayIdle(e *Elevator) {
 	// Viktig: aldri start motor hvis obstruert
 	if e.obstructed {
