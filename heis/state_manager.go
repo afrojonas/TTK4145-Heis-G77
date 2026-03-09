@@ -231,16 +231,32 @@ func (sm *StateManager) detectClearedHallOrders(currentOrders [][]bool) {
 	}
 }
 
-// broadcastClearedHallOrder sender cleared signal for en hall order
+// broadcastClearedHallOrder sender cleared signal for en hall order med ID
 func (sm *StateManager) broadcastClearedHallOrder(floor int, button elevio.ButtonType) {
+	// Slå opp original hall order ID basert på floor+button
+	var orderID int
+	foundID := false
+	for id, order := range sm.activeHallOrders {
+		if order.Floor == floor && int(order.Button) == int(button) {
+			orderID = id
+			foundID = true
+			break
+		}
+	}
+
 	hallOrder := HallOrderMsg{
+		ID:     orderID,
 		Floor:  floor,
 		Button: button,
 	}
 	select {
 	case sm.hallOrdersClearedTxCh <- hallOrder:
-		fmt.Printf("[StateManager-%d] Sent cleared signal: floor=%d button=%d\n",
-			sm.elevatorID, floor, int(button))
+		fmt.Printf("[StateManager-%d] Sent cleared signal: ID=%d floor=%d button=%d\n",
+			sm.elevatorID, orderID, floor, int(button))
+		// Fjern fra active orders når cleared-signal er sendt
+		if foundID {
+			delete(sm.activeHallOrders, orderID)
+		}
 	default:
 		// Channel full, skip
 	}
