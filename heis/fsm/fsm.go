@@ -174,7 +174,7 @@ func onFloor(e *Elevator, f int) {
 		elevio.SetDoorOpenLamp(true)
 		fmt.Println("[DOOR] OPEN")
 
-		clearOrdersAtFloor(e, f)
+		clearOrdersAtFloor(e, f, int(e.lastDir))
 
 		// Start door timer - non-blocking
 		if e.doorTimer != nil {
@@ -367,13 +367,34 @@ func chooseDirection(e *Elevator) Dir {
 
 /*** Helpers ***/
 
-func clearOrdersAtFloor(e *Elevator, floor int) {
-	fmt.Printf("[CLEAR] floor=%d\n", floor)
-	for bt := elevio.ButtonType(0); bt < 3; bt++ {
-		if e.orders[floor][bt] {
-			e.orders[floor][bt] = false
-			elevio.SetButtonLamp(bt, floor, false)
+func clearOrdersAtFloor(e *Elevator, floor int, direction int) {
+	fmt.Printf("[CLEAR] floor=%d dir=%d\n", floor, direction)
+
+	// CAB buttons (BT_Cab=2) slettes alltid
+	if e.orders[floor][2] {
+		e.orders[floor][2] = false
+		elevio.SetButtonLamp(2, floor, false)
+		fmt.Printf("  - Cleared CAB\n")
+	}
+
+	// Hall buttons (BT_HallUp=0, BT_HallDown=1) slettes kun hvis heisen beveger seg i den retningen
+	// direction = 1 (UP) -> slette HallUp (passasjerer som vil opp)
+	// direction = -1 (DOWN) -> slette HallDown (passasjerer som vil ned)
+
+	if direction == 1 { // Heisen beveger seg oppover
+		if e.orders[floor][0] { // BT_HallUp
+			e.orders[floor][0] = false
+			elevio.SetButtonLamp(0, floor, false)
+			fmt.Printf("  - Cleared HallUp (moving up)\n")
 		}
+		// IKKE slett HallDown når heisen går oppover
+	} else if direction == -1 { // Heisen beveger seg nedover
+		if e.orders[floor][1] { // BT_HallDown
+			e.orders[floor][1] = false
+			elevio.SetButtonLamp(1, floor, false)
+			fmt.Printf("  - Cleared HallDown (moving down)\n")
+		}
+		// IKKE slett HallUp når heisen går nedover
 	}
 }
 
