@@ -109,6 +109,10 @@ func (sm *StateManager) Run() {
 			}
 
 			sm.knownElevators[rcvdState.ID] = rcvdState
+
+			// VIKTIG: Detekt når ANDRE heiser clearer hall orders
+			sm.detectClearedHallOrdersForElevator(rcvdState.ID, rcvdState.Orders)
+
 			sm.publishGlobalState()
 
 		// Motta ny hall order
@@ -240,6 +244,38 @@ func (sm *StateManager) broadcastClearedHallOrder(floor int, button elevio.Butto
 	default:
 		// Channel full, skip
 	}
+}
+
+// detectClearedHallOrdersForElevator sjekker en spesifikk heis for clearet hall orders
+func (sm *StateManager) detectClearedHallOrdersForElevator(elevID int, currentOrders [][]bool) {
+	prevOrders := sm.previousOrderStates[elevID]
+
+	// Hvis ingen tidligere tilstand, lagre nåværende og return
+	if prevOrders == nil {
+		sm.previousOrderStates[elevID] = copyOrders(currentOrders)
+		return
+	}
+
+	// Sammenligner og finner ordrer som har forsvunnet
+	for floor := 0; floor < len(currentOrders); floor++ {
+		for button := 0; button < len(currentOrders[floor]); button++ {
+			hadOrder := prevOrders[floor][button]
+			hasOrder := currentOrders[floor][button]
+
+			// Hvis ordren har forsvunnet (fra true til false), er den clearet
+			if hadOrder && !hasOrder {
+				// Kun broadcast hall calls (button 0 og 1), ikke CAB calls (button 2)
+				if button == 0 || button == 1 {
+					sm.broadcastClearedHallOrder(floor, elevio.ButtonType(button))
+					fmt.Printf("[StateManager-%d] Detected cleared order from elev %d: floor=%d button=%d\n",
+						sm.elevatorID, elevID, floor, int(button))
+				}
+			}
+		}
+	}
+
+	// Oppdater tidligere tilstand
+	sm.previousOrderStates[elevID] = copyOrders(currentOrders)
 }
 
 // copyOrders lager en kopi av orders for lagring
