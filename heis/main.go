@@ -8,7 +8,7 @@ import (
 
 func main() {
 	numFloors := 4
-	elevio.Init("localhost:15666", numFloors)
+	elevio.Init("localhost:15657", numFloors)
 
 	// FSM channels
 	drvButtons := make(chan elevio.ButtonEvent)
