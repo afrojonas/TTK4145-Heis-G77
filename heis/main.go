@@ -61,6 +61,10 @@ func main() {
 	hallOrderTxCh := make(chan HallOrderMsg)
 	hallOrderRxCh := make(chan HallOrderMsg)
 
+	// Hall order cleared broadcast (når en heis har clearet en hall order)
+	hallOrdersClearedTxCh := make(chan HallOrderMsg)
+	hallOrdersClearedRxCh := make(chan HallOrderMsg)
+
 	// Global state (bygget av StateManager)
 	globalStateCh := make(chan GlobalNetworkState)
 
@@ -126,6 +130,11 @@ func main() {
 	go bcast.Transmitter(16790, hallOrderTxCh)
 	go bcast.Receiver(16790, hallOrderRxCh)
 
+	// Hall orders cleared broadcast via bcast
+	// Denne sender/mottar HallOrderMsg på port 16791 (signal når en heis har clearet en hall order)
+	go bcast.Transmitter(16791, hallOrdersClearedTxCh)
+	go bcast.Receiver(16791, hallOrdersClearedRxCh)
+
 	// Monitor peer updates (for debugging)
 	go func() {
 		for peerUpdate := range peerUpdateCh {
@@ -143,6 +152,7 @@ func main() {
 		fsmStateUpdates,
 		stateTxCh,
 		stateRxCh,
+		hallOrdersClearedTxCh,
 		globalStateCh,
 	)
 	go stateManager.Run()
@@ -162,6 +172,35 @@ func main() {
 	fmt.Println("[Main] Starting FSM...")
 
 	go fsm.Run(numFloors, drvCabCalls, drvFloors, drvObstr, drvOrders, fsmStateUpdates)
+
+	// ===== HALL BUTTON LIGHT MANAGER =====
+	// Håndterer hall button lights globalt på tvers av alle heiser
+	// Tennerer lysene når en hall order mottas, sletter når den cleareres
+	go func() {
+		activeHallOrders := make(map[int]HallOrderMsg) // OrderID -> HallOrderMsg
+
+		for {
+			select {
+			// Ny hall order -> sett lyset
+			case hallOrder := <-hallOrderRxCh:
+				if _, exists := activeHallOrders[hallOrder.ID]; !exists {
+					activeHallOrders[hallOrder.ID] = hallOrder
+					elevio.SetButtonLamp(hallOrder.Button, hallOrder.Floor, true)
+					fmt.Printf("[HallLightMgr] Set light: floor=%d button=%d (ID=%d)\n",
+						hallOrder.Floor, hallOrder.Button, hallOrder.ID)
+				}
+
+			// Hall order cleared -> slett lyset
+			case hallOrder := <-hallOrdersClearedRxCh:
+				if _, exists := activeHallOrders[hallOrder.ID]; exists {
+					delete(activeHallOrders, hallOrder.ID)
+					elevio.SetButtonLamp(hallOrder.Button, hallOrder.Floor, false)
+					fmt.Printf("[HallLightMgr] Cleared light: floor=%d button=%d (ID=%d)\n",
+						hallOrder.Floor, hallOrder.Button, hallOrder.ID)
+				}
+			}
+		}
+	}()
 
 	fmt.Println("[Main] System ready!")
 

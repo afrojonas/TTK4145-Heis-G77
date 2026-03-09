@@ -228,7 +228,13 @@ func onExternalOrder(e *Elevator, ord Order) {
 	// Legg til ordre hvis det ikke allerede finnes
 	if !e.orders[ord.Floor][ord.Button] {
 		e.orders[ord.Floor][ord.Button] = true
-		elevio.SetButtonLamp(ord.Button, ord.Floor, true)
+
+		// SET BUTTON LAMP ONLY FOR CAB BUTTONS
+		// Hall order lights (button 0 og 1) handled globally by main's HallLightMgr
+		// CAB light (button 2) handled locally by FSM
+		if ord.Button == 2 { // BT_Cab
+			elevio.SetButtonLamp(ord.Button, ord.Floor, true)
+		}
 	}
 
 	// Hvis vi står stille: prøv å starte
@@ -370,6 +376,8 @@ func chooseDirection(e *Elevator) Dir {
 func clearOrdersAtFloor(e *Elevator, floor int, direction int) {
 	fmt.Printf("[CLEAR] floor=%d dir=%d\n", floor, direction)
 
+	numFloors := len(e.orders)
+
 	// CAB buttons (BT_Cab=2) slettes alltid
 	if e.orders[floor][2] {
 		e.orders[floor][2] = false
@@ -377,24 +385,34 @@ func clearOrdersAtFloor(e *Elevator, floor int, direction int) {
 		fmt.Printf("  - Cleared CAB\n")
 	}
 
-	// Hall buttons (BT_HallUp=0, BT_HallDown=1) slettes kun hvis heisen beveger seg i den retningen
-	// direction = 1 (UP) -> slette HallUp (passasjerer som vil opp)
-	// direction = -1 (DOWN) -> slette HallDown (passasjerer som vil ned)
+	// Hall buttons (BT_HallUp=0, BT_HallDown=1) håndteres etter etasje
 
-	if direction == 1 { // Heisen beveger seg oppover
+	if floor == 0 { // Nedeterste etasje: kun "opp"-knapp finnes
 		if e.orders[floor][0] { // BT_HallUp
 			e.orders[floor][0] = false
 			elevio.SetButtonLamp(0, floor, false)
-			fmt.Printf("  - Cleared HallUp (moving up)\n")
+			fmt.Printf("  - Cleared HallUp (bottom floor)\n")
 		}
-		// IKKE slett HallDown når heisen går oppover
-	} else if direction == -1 { // Heisen beveger seg nedover
+	} else if floor == numFloors-1 { // Øverste etasje: kun "ned"-knapp finnes
 		if e.orders[floor][1] { // BT_HallDown
 			e.orders[floor][1] = false
 			elevio.SetButtonLamp(1, floor, false)
-			fmt.Printf("  - Cleared HallDown (moving down)\n")
+			fmt.Printf("  - Cleared HallDown (top floor)\n")
 		}
-		// IKKE slett HallUp når heisen går nedover
+	} else { // Midtetasjer: begge knapper kan være tilstede, slett basert på retning
+		if direction == 1 { // Heisen beveger seg oppover
+			if e.orders[floor][0] { // BT_HallUp
+				e.orders[floor][0] = false
+				elevio.SetButtonLamp(0, floor, false)
+				fmt.Printf("  - Cleared HallUp (moving up)\n")
+			}
+		} else if direction == -1 { // Heisen beveger seg nedover
+			if e.orders[floor][1] { // BT_HallDown
+				e.orders[floor][1] = false
+				elevio.SetButtonLamp(1, floor, false)
+				fmt.Printf("  - Cleared HallDown (moving down)\n")
+			}
+		}
 	}
 }
 
