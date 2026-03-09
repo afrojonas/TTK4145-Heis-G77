@@ -57,9 +57,10 @@ func main() {
 	stateTxCh := make(chan ElevatorStateMsg)
 	stateRxCh := make(chan ElevatorStateMsg)
 
-	// Hall order broadcast
+	// Hall order broadcast - to separate receivers slik at både HallLightMgr og OrderAssigner får alle meldinger
 	hallOrderTxCh := make(chan HallOrderMsg)
-	hallOrderRxCh := make(chan HallOrderMsg)
+	hallOrderRxCh1 := make(chan HallOrderMsg) // For HallLightMgr
+	hallOrderRxCh2 := make(chan HallOrderMsg) // For OrderAssigner
 
 	// Hall order cleared broadcast (når en heis har clearet en hall order)
 	hallOrdersClearedTxCh := make(chan HallOrderMsg)
@@ -125,10 +126,11 @@ func main() {
 	go bcast.Transmitter(16789, stateTxCh)
 	go bcast.Receiver(16789, stateRxCh)
 
-	// Hall order broadcast via bcast
-	// Denne sender/mottar HallOrderMsg på port 16790
+	// Hall order broadcast via bcast - TWO separate receivers
+	// Denne sender HallOrderMsg på port 16790
 	go bcast.Transmitter(16790, hallOrderTxCh)
-	go bcast.Receiver(16790, hallOrderRxCh)
+	go bcast.Receiver(16790, hallOrderRxCh1) // For HallLightMgr
+	go bcast.Receiver(16790, hallOrderRxCh2) // For OrderAssigner
 
 	// Hall orders cleared broadcast via bcast
 	// Denne sender/mottar HallOrderMsg på port 16791 (signal når en heis har clearet en hall order)
@@ -162,7 +164,7 @@ func main() {
 
 	orderAssigner := NewDeterministicOrderAssigner(
 		elevatorID,
-		hallOrderRxCh,
+		hallOrderRxCh2,
 		globalStateCh,
 		drvOrders,
 	)
@@ -182,7 +184,7 @@ func main() {
 		for {
 			select {
 			// Ny hall order -> sett lyset
-			case hallOrder := <-hallOrderRxCh:
+			case hallOrder := <-hallOrderRxCh1:
 				if _, exists := activeHallOrders[hallOrder.ID]; !exists {
 					activeHallOrders[hallOrder.ID] = hallOrder
 					elevio.SetButtonLamp(hallOrder.Button, hallOrder.Floor, true)
