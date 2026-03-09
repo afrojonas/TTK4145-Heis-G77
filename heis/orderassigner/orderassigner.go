@@ -8,6 +8,13 @@ import (
 	"Driver-go/fsm"
 )
 
+
+
+
+//GAMMEL ORDERASSIGNER, BRUKES IKKE 
+
+
+
 // ElevatorState represents the state of an elevator
 type ElevatorState struct {
 	ID        int

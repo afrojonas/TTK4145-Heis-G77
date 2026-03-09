@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 func main() {
@@ -44,7 +45,8 @@ func main() {
 	fmt.Printf("========================================\n\n")
 
 	// ===== HARDWARE CHANNELS (FSM) =====
-	drvButtons := make(chan elevio.ButtonEvent)
+	drvButtonsRaw := make(chan elevio.ButtonEvent, 10) // Raw input fra hardware
+	drvCabCalls := make(chan elevio.ButtonEvent, 10)   // Kun CAB calls (BT_Cab=2) til FSM
 	drvFloors := make(chan int)
 	drvObstr := make(chan bool)
 	drvOrders := make(chan fsm.Order, 10)
@@ -67,9 +69,44 @@ func main() {
 	peerTxEnable := make(chan bool)
 
 	// ===== START HARDWARE POLLING =====
-	go elevio.PollButtons(drvButtons)
+	go elevio.PollButtons(drvButtonsRaw)
 	go elevio.PollFloorSensor(drvFloors)
 	go elevio.PollObstructionSwitch(drvObstr)
+
+	// ===== BUTTON ROUTER & HALL CALL BROADCASTER =====
+	// Filtrerer buttons:
+	// - Hall calls (BT_HallUp=0, BT_HallDown=1) -> broadcast via hallOrderTxCh
+	// - CAB calls (BT_Cab=2) -> lokal ordre direkte til FSM via drvCabCalls
+	var hallOrderCounter int
+	go func() {
+		for btn := range drvButtonsRaw {
+			if btn.Button == 0 || btn.Button == 1 { // BT_HallUp eller BT_HallDown
+				// Broadcast hall call slik at alle heiser kan tildele det
+				hallOrderCounter++
+				hallOrder := HallOrderMsg{
+					ID:     hallOrderCounter,
+					Floor:  btn.Floor,
+					Button: btn.Button,
+					Time:   time.Now().UnixNano(),
+				}
+				select {
+				case hallOrderTxCh <- hallOrder:
+					fmt.Printf("[HallCaller] Broadcast hall call: floor=%d button=%d (ID=%d)\n",
+						btn.Floor, btn.Button, hallOrderCounter)
+				default:
+					fmt.Printf("[HallCaller] Channel full, dropped hall call\n")
+				}
+			} else if btn.Button == 2 { // BT_Cab
+				// CAB calls går direkte til FSM (lokale ordrer)
+				select {
+				case drvCabCalls <- btn:
+					fmt.Printf("[ButtonRouter] CAB call: floor=%d\n", btn.Floor)
+				default:
+					fmt.Printf("[ButtonRouter] CAB channel full\n")
+				}
+			}
+		}
+	}()
 
 	// ===== START NETWORK-GO COMPONENTS =====
 	fmt.Println("[Main] Starting network components...")
@@ -124,7 +161,7 @@ func main() {
 	// ===== START FSM =====
 	fmt.Println("[Main] Starting FSM...")
 
-	go fsm.Run(numFloors, drvButtons, drvFloors, drvObstr, drvOrders, fsmStateUpdates)
+	go fsm.Run(numFloors, drvCabCalls, drvFloors, drvObstr, drvOrders, fsmStateUpdates)
 
 	fmt.Println("[Main] System ready!")
 
