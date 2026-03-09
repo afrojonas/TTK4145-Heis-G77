@@ -57,10 +57,11 @@ func main() {
 	stateTxCh := make(chan ElevatorStateMsg)
 	stateRxCh := make(chan ElevatorStateMsg)
 
-	// Hall order broadcast - to separate receivers slik at både HallLightMgr og OrderAssigner får alle meldinger
+	// Hall order broadcast - three separate receivers slik at HallLightMgr, OrderAssigner, og StateManager får alle meldinger
 	hallOrderTxCh := make(chan HallOrderMsg)
 	hallOrderRxCh1 := make(chan HallOrderMsg) // For HallLightMgr
 	hallOrderRxCh2 := make(chan HallOrderMsg) // For OrderAssigner
+	hallOrderRxCh3 := make(chan HallOrderMsg) // For StateManager
 
 	// Hall order cleared broadcast (når en heis har clearet en hall order)
 	hallOrdersClearedTxCh := make(chan HallOrderMsg)
@@ -126,11 +127,12 @@ func main() {
 	go bcast.Transmitter(16789, stateTxCh)
 	go bcast.Receiver(16789, stateRxCh)
 
-	// Hall order broadcast via bcast - TWO separate receivers
+	// Hall order broadcast via bcast - THREE separate receivers
 	// Denne sender HallOrderMsg på port 16790
 	go bcast.Transmitter(16790, hallOrderTxCh)
 	go bcast.Receiver(16790, hallOrderRxCh1) // For HallLightMgr
 	go bcast.Receiver(16790, hallOrderRxCh2) // For OrderAssigner
+	go bcast.Receiver(16790, hallOrderRxCh3) // For StateManager
 
 	// Hall orders cleared broadcast via bcast
 	// Denne sender/mottar HallOrderMsg på port 16791 (signal når en heis har clearet en hall order)
@@ -154,6 +156,7 @@ func main() {
 		fsmStateUpdates,
 		stateTxCh,
 		stateRxCh,
+		hallOrderRxCh3,
 		hallOrdersClearedTxCh,
 		globalStateCh,
 	)

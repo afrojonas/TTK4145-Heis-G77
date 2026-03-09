@@ -14,11 +14,13 @@ type StateManager struct {
 	myStateCh             <-chan fsm.StateUpdate    // Fra FSM
 	stateTxCh             chan<- ElevatorStateMsg   // Til bcast.Transmitter
 	stateRxCh             <-chan ElevatorStateMsg   // Fra bcast.Receiver
+	hallOrderRxCh         <-chan HallOrderMsg       // Mottatt hall orders (for tracking)
 	hallOrdersClearedTxCh chan<- HallOrderMsg       // Til bcast for cleared hall orders
 	globalStateCh         chan<- GlobalNetworkState // Utgående komplett tilstand
 	knownElevators        map[int]ElevatorStateMsg  // Lagrete stater
 	lastPrintedState      map[int]ElevatorStateMsg  // Siste state vi printet (for change detection)
 	previousOrderStates   map[int][][]bool          // Forrige tilstand av orders per heis (for change detection)
+	activeHallOrders      map[int]HallOrderMsg      // Track alle aktive hall orders (ID -> HallOrderMsg)
 	lastPeerUpdate        time.Time
 	numFloors             int
 }
@@ -30,6 +32,7 @@ func NewStateManager(
 	myStateCh <-chan fsm.StateUpdate,
 	stateTxCh chan<- ElevatorStateMsg,
 	stateRxCh <-chan ElevatorStateMsg,
+	hallOrderRxCh <-chan HallOrderMsg,
 	hallOrdersClearedTxCh chan<- HallOrderMsg,
 	globalStateCh chan<- GlobalNetworkState,
 ) *StateManager {
@@ -38,11 +41,13 @@ func NewStateManager(
 		myStateCh:             myStateCh,
 		stateTxCh:             stateTxCh,
 		stateRxCh:             stateRxCh,
+		hallOrderRxCh:         hallOrderRxCh,
 		hallOrdersClearedTxCh: hallOrdersClearedTxCh,
 		globalStateCh:         globalStateCh,
 		knownElevators:        make(map[int]ElevatorStateMsg),
 		lastPrintedState:      make(map[int]ElevatorStateMsg),
 		previousOrderStates:   make(map[int][][]bool),
+		activeHallOrders:      make(map[int]HallOrderMsg),
 		numFloors:             numFloors,
 	}
 }
@@ -106,6 +111,12 @@ func (sm *StateManager) Run() {
 			sm.knownElevators[rcvdState.ID] = rcvdState
 			sm.publishGlobalState()
 
+		// Motta ny hall order
+		case hallOrder := <-sm.hallOrderRxCh:
+			sm.activeHallOrders[hallOrder.ID] = hallOrder
+			fmt.Printf("[StateManager-%d] Tracking active hall order: ID=%d floor=%d button=%d\n",
+				sm.elevatorID, hallOrder.ID, hallOrder.Floor, hallOrder.Button)
+
 		// Broadcast min state jevnlig
 		case <-broadcastTicker.C:
 			myState.Timestamp = time.Now().UnixNano()
@@ -155,8 +166,10 @@ func (sm *StateManager) publishGlobalState() {
 	}
 }
 
-// detectClearedHallOrders sammenligner tidligere ordre tilstand med ny og sender signal når hall orders cleares
+// detectClearedHallOrders monitorerer ALLE heiser sine ordrer og sender cleared signal når hall orders forsvinner
+// Dette sikrer at ALLE paneler slukker lysene når NOEN heis clearer en hall order
 func (sm *StateManager) detectClearedHallOrders(currentOrders [][]bool) {
+	// Først: detekt clearet ordrer fra EGEN heis
 	prevOrders := sm.previousOrderStates[sm.elevatorID]
 
 	// Hvis ingen tidligere tilstand, lagre nåværende og return
@@ -165,7 +178,7 @@ func (sm *StateManager) detectClearedHallOrders(currentOrders [][]bool) {
 		return
 	}
 
-	// Sammenligner og finner ordrer som har forsvunnet
+	// Sammenligner og finner ordrer som har forsvunnet fra egen heis
 	for floor := 0; floor < len(currentOrders); floor++ {
 		for button := 0; button < len(currentOrders[floor]); button++ {
 			hadOrder := prevOrders[floor][button]
@@ -175,25 +188,58 @@ func (sm *StateManager) detectClearedHallOrders(currentOrders [][]bool) {
 			if hadOrder && !hasOrder {
 				// Kun broadcast hall calls (button 0 og 1), ikke CAB calls (button 2)
 				if button == 0 || button == 1 {
-					hallOrder := HallOrderMsg{
-						Floor:  floor,
-						Button: elevio.ButtonType(button),
-						// ID og Time settes ikke, da dette er et "cleared" signal
-					}
-					select {
-					case sm.hallOrdersClearedTxCh <- hallOrder:
-						fmt.Printf("[StateManager-%d] Sent cleared signal: floor=%d button=%d\n",
-							sm.elevatorID, floor, button)
-					default:
-						// Channel full, skip
-					}
+					sm.broadcastClearedHallOrder(floor, elevio.ButtonType(button))
 				}
 			}
 		}
 	}
 
-	// Oppdater tidligere tilstand
+	// Oppdater tidligere tilstand for egen heis
 	sm.previousOrderStates[sm.elevatorID] = copyOrders(currentOrders)
+
+	// Deretter: monitorere ALLE andre heiser sin state via knownElevators
+	for elevID, elevState := range sm.knownElevators {
+		if elevID == sm.elevatorID {
+			continue // Skip egen heis, allerede håndlet ovenfor
+		}
+
+		prevState := sm.previousOrderStates[elevID]
+		if prevState == nil {
+			sm.previousOrderStates[elevID] = copyOrders(elevState.Orders)
+			continue
+		}
+
+		// Sjekk om noen hall orders har forsvunnet fra denne heisen
+		for floor := 0; floor < len(elevState.Orders); floor++ {
+			for button := 0; button < len(elevState.Orders[floor]); button++ {
+				hadOrder := prevState[floor][button]
+				hasOrder := elevState.Orders[floor][button]
+
+				if hadOrder && !hasOrder {
+					if button == 0 || button == 1 {
+						sm.broadcastClearedHallOrder(floor, elevio.ButtonType(button))
+					}
+				}
+			}
+		}
+
+		sm.previousOrderStates[elevID] = copyOrders(elevState.Orders)
+	}
+}
+
+// broadcastClearedHallOrder sender cleared signal for en hall order
+func (sm *StateManager) broadcastClearedHallOrder(floor int, button elevio.ButtonType) {
+	hallOrder := HallOrderMsg{
+		Floor:  floor,
+		Button: button,
+	}
+	select {
+	case sm.hallOrdersClearedTxCh <- hallOrder:
+		fmt.Printf("[StateManager-%d] Sent cleared signal: floor=%d button=%d\n",
+			sm.elevatorID, floor, int(button))
+	default:
+		// Channel full, skip
+	}
 }
 
 // copyOrders lager en kopi av orders for lagring
