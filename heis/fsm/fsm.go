@@ -171,13 +171,16 @@ func onFloor(e *Elevator, f int) {
 		fmt.Println("[STOP] stopping here")
 		elevio.SetMotorDirection(elevio.MD_Stop)
 
+		// Save current direction BEFORE setting to STOP
+		directionWhenStopped := e.dir
+
 		e.state = ST_DoorOpen
 		e.dir = DIR_Stop
 
 		elevio.SetDoorOpenLamp(true)
 		fmt.Println("[DOOR] OPEN")
 
-		clearOrdersAtFloor(e, f, int(e.lastDir))
+		clearOrdersAtFloor(e, f, int(directionWhenStopped))
 
 		// Broadcast to all elevators that this floor has been served
 		select {
