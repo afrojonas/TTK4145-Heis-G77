@@ -183,14 +183,16 @@ func main() {
 	// Håndterer hall button lights globalt på tvers av alle heiser
 	// Tennerer lysene når en hall order mottas, sletter når den cleareres
 	go func() {
-		activeHallOrders := make(map[int]HallOrderMsg) // OrderID -> HallOrderMsg
+		// Track lys med floor+button som nøkkel (ikke ID, siden ID kan variere)
+		activeLights := make(map[string]bool) // "floor-button" -> true if lit
 
 		for {
 			select {
 			// Ny hall order -> sett lyset
 			case hallOrder := <-hallOrderRxCh1:
-				if _, exists := activeHallOrders[hallOrder.ID]; !exists {
-					activeHallOrders[hallOrder.ID] = hallOrder
+				key := fmt.Sprintf("%d-%d", hallOrder.Floor, hallOrder.Button)
+				if !activeLights[key] {
+					activeLights[key] = true
 					elevio.SetButtonLamp(hallOrder.Button, hallOrder.Floor, true)
 					fmt.Printf("[HallLightMgr] Set light: floor=%d button=%d (ID=%d)\n",
 						hallOrder.Floor, hallOrder.Button, hallOrder.ID)
@@ -198,8 +200,9 @@ func main() {
 
 			// Hall order cleared -> slett lyset
 			case hallOrder := <-hallOrdersClearedRxCh:
-				if _, exists := activeHallOrders[hallOrder.ID]; exists {
-					delete(activeHallOrders, hallOrder.ID)
+				key := fmt.Sprintf("%d-%d", hallOrder.Floor, hallOrder.Button)
+				if activeLights[key] {
+					delete(activeLights, key)
 					elevio.SetButtonLamp(hallOrder.Button, hallOrder.Floor, false)
 					fmt.Printf("[HallLightMgr] Cleared light: floor=%d button=%d (ID=%d)\n",
 						hallOrder.Floor, hallOrder.Button, hallOrder.ID)
