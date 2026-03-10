@@ -185,7 +185,8 @@ func main() {
 	// ROBUST implementasjon: lytter direkte på state-updates for å detektere når ordrer er clearet
 	go func() {
 		// Track lys med floor+button som nøkkel
-		activeLights := make(map[string]bool) // "floor-button" -> true if lit
+		activeLights := make(map[string]bool)    // "floor-button" -> true if lit
+		confirmedLights := make(map[string]bool) // "floor-button" -> true if order has been seen on at least one elevator
 		// Lagre siste kjente state fra hver heis (for å sjekke om ordrer finnes)
 		knownElevatorStates := make(map[int]ElevatorStateMsg)
 
@@ -196,16 +197,17 @@ func main() {
 				key := fmt.Sprintf("%d-%d", hallOrder.Floor, hallOrder.Button)
 				if !activeLights[key] {
 					activeLights[key] = true
+					confirmedLights[key] = false // Ikke confirmed ennå
 					elevio.SetButtonLamp(hallOrder.Button, hallOrder.Floor, true)
 					fmt.Printf("[HallLightMgr] Set light: floor=%d button=%d\n",
 						hallOrder.Floor, hallOrder.Button)
 				}
 
-			// State update fra andre heiser -> sjekk om ordrer finnes fortsatt
+			// State update fra andre heiser -> sjekk om ordrer som er tente finnes fortsatt
 			case elevState := <-stateRxCh:
 				knownElevatorStates[elevState.ID] = elevState
 
-				// Sjekk alle aktive lys
+				// Sjekk alle TENTE lys
 				for lightKey := range activeLights {
 					// Parse "floor-button" nøkkel
 					var floor, button int
@@ -222,11 +224,19 @@ func main() {
 						}
 					}
 
-					// Hvis ordren ikke finnes på noen heis, slukk lyset
-					if !orderExists {
+					// Hvis ordren finnes, marker som confirmed
+					if orderExists && !confirmedLights[lightKey] {
+						confirmedLights[lightKey] = true
+						fmt.Printf("[HallLightMgr] Confirmed light: floor=%d button=%d (order assigned to elevator)\n",
+							floor, button)
+					}
+
+					// Hvis ordren ikke finnes OG den er confirmed, slukk lyset
+					if !orderExists && confirmedLights[lightKey] {
 						delete(activeLights, lightKey)
+						delete(confirmedLights, lightKey)
 						elevio.SetButtonLamp(elevio.ButtonType(button), floor, false)
-						fmt.Printf("[HallLightMgr] Cleared light: floor=%d button=%d (order served/gone)\n",
+						fmt.Printf("[HallLightMgr] Cleared light: floor=%d button=%d (order served)\n",
 							floor, button)
 					}
 				}
