@@ -251,6 +251,34 @@ func onExternalOrder(e *Elevator, ord Order) {
 		}
 	}
 
+	// VIKTIG: Hvis heisen ALLEREDE ER på etasjen med ordren og er idle, behandle ordren umiddelbart
+	if e.state == ST_Idle && e.floor == ord.Floor {
+		fmt.Printf("[EXTERNAL ORDER] Already at floor %d -> opening door immediately\n", ord.Floor)
+
+		e.state = ST_DoorOpen
+		e.dir = DIR_Stop
+
+		elevio.SetDoorOpenLamp(true)
+		fmt.Println("[DOOR] OPEN")
+
+		clearOrdersAtFloor(e, ord.Floor, int(e.lastDir))
+
+		// Broadcast that this floor has been served
+		select {
+		case e.floorServedTxCh <- ord.Floor:
+			fmt.Printf("[FSM] Broadcasted floor served: %d\n", ord.Floor)
+		default:
+			fmt.Printf("[FSM] Floor served channel full, dropped signal for floor %d\n", ord.Floor)
+		}
+
+		// Start door timer
+		if e.doorTimer != nil {
+			e.doorTimer.Stop()
+		}
+		e.doorTimer = time.NewTimer(DoorOpenDur)
+		return
+	}
+
 	// Hvis vi står stille: prøv å starte
 	if e.state == ST_Idle {
 		startOrStayIdle(e)
