@@ -181,10 +181,13 @@ func main() {
 
 	// ===== HALL BUTTON LIGHT MANAGER =====
 	// Håndterer hall button lights globalt på tvers av alle heiser
-	// Tennerer lysene når en hall order mottas, sletter når den cleareres
+	// Tennerer lysene når en hall order mottas, sletter når bestillingen er betjent (fjernet fra ALLE heiser)
+	// ROBUST implementasjon: lytter direkte på state-updates for å detektere når ordrer er clearet
 	go func() {
-		// Track lys med floor+button som nøkkel (ikke ID, siden ID kan variere)
+		// Track lys med floor+button som nøkkel
 		activeLights := make(map[string]bool) // "floor-button" -> true if lit
+		// Lagre siste kjente state fra hver heis (for å sjekke om ordrer finnes)
+		knownElevatorStates := make(map[int]ElevatorStateMsg)
 
 		for {
 			select {
@@ -194,18 +197,38 @@ func main() {
 				if !activeLights[key] {
 					activeLights[key] = true
 					elevio.SetButtonLamp(hallOrder.Button, hallOrder.Floor, true)
-					fmt.Printf("[HallLightMgr] Set light: floor=%d button=%d (ID=%d)\n",
-						hallOrder.Floor, hallOrder.Button, hallOrder.ID)
+					fmt.Printf("[HallLightMgr] Set light: floor=%d button=%d\n",
+						hallOrder.Floor, hallOrder.Button)
 				}
 
-			// Hall order cleared -> slett lyset
-			case hallOrder := <-hallOrdersClearedRxCh:
-				key := fmt.Sprintf("%d-%d", hallOrder.Floor, hallOrder.Button)
-				if activeLights[key] {
-					delete(activeLights, key)
-					elevio.SetButtonLamp(hallOrder.Button, hallOrder.Floor, false)
-					fmt.Printf("[HallLightMgr] Cleared light: floor=%d button=%d (ID=%d)\n",
-						hallOrder.Floor, hallOrder.Button, hallOrder.ID)
+			// State update fra andre heiser -> sjekk om ordrer finnes fortsatt
+			case elevState := <-stateRxCh:
+				knownElevatorStates[elevState.ID] = elevState
+
+				// Sjekk alle aktive lys
+				for lightKey := range activeLights {
+					// Parse "floor-button" nøkkel
+					var floor, button int
+					fmt.Sscanf(lightKey, "%d-%d", &floor, &button)
+
+					// Sjekk om denne ordren finnes på NOE heis
+					orderExists := false
+					for _, elev := range knownElevatorStates {
+						if floor < len(elev.Orders) && button < len(elev.Orders[floor]) {
+							if elev.Orders[floor][button] {
+								orderExists = true
+								break
+							}
+						}
+					}
+
+					// Hvis ordren ikke finnes på noen heis, slukk lyset
+					if !orderExists {
+						delete(activeLights, lightKey)
+						elevio.SetButtonLamp(elevio.ButtonType(button), floor, false)
+						fmt.Printf("[HallLightMgr] Cleared light: floor=%d button=%d (order served/gone)\n",
+							floor, button)
+					}
 				}
 			}
 		}
